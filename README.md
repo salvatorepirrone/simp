@@ -13,6 +13,11 @@
    risolte a runtime individuando la cartella locale di sincronizzazione
    OneDrive/SharePoint, cosi' sia gli script Python sia i file prodotti
    possono risiedere su una libreria SharePoint condivisa dal team.
+3. **Nessun percorso con lo username in chiaro.** Anche `PYTHON_EXE` e la
+   cartella temporanea non sono piu' percorsi fissi con lo username di chi
+   ha scritto la macro (`C:\Users\spirrone01\...`): vengono risolti a
+   runtime per l'utente che sta effettivamente eseguendo Excel, cosi' la
+   macro funziona invariata sul PC di qualunque collega.
 
 ## File
 
@@ -68,11 +73,16 @@ Nella cartella `<radice SharePoint>\Scripts\` copia:
 `filtra_consolidato_provincia.py`, `filtra_dcpensioni.py`,
 `filtra_dcpensioni_regione.py`, `filtra_dcpensioni_provincia.py`.
 
-### 3. Verifica `PYTHON_EXE`
+### 3. Python
 
-Resta un percorso locale per utente (l'interprete Python non serve sia
-condiviso): aggiorna la costante `PYTHON_EXE` in cima al modulo se il tuo
-percorso di installazione e' diverso.
+Non serve piu' configurare nulla in genere: la macro cerca da sola `py`
+(il launcher ufficiale) o `python` nel PATH di sistema, per l'utente che
+sta usando Excel in quel momento (funziona quindi automaticamente anche
+per i colleghi, ognuno con il proprio Python installato). Se
+sul tuo PC l'autorilevamento non trovasse nulla (Python non installato, o
+installato senza l'opzione "Aggiungi al PATH"), valorizza
+`PYTHON_EXE_OVERRIDE` in cima al modulo con il percorso completo del tuo
+`python.exe`.
 
 ### 4. Migra lo storico (una tantum)
 

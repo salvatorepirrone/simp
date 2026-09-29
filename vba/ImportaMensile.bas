@@ -73,12 +73,19 @@ Attribute VB_Name = "ImportaMensile"
 Option Explicit
 
 ' --- Interprete e script Python ---
-Private Const PYTHON_EXE  As String = "C:\Users\spirrone01\AppData\Local\Programs\Python\Python314\python.exe"
+' PYTHON_EXE non e' piu' un percorso fisso con lo username in chiaro (che
+' cambierebbe da un PC/utente all'altro): viene individuato a runtime
+' (funzione GetPythonExe(), cache in mPythonExe) cercando "py"/"python" nel
+' PATH di sistema. Se sul tuo PC l'autorilevamento non funzionasse, puoi
+' comunque forzare un percorso fisso valorizzando PYTHON_EXE_OVERRIDE.
+Private Const PYTHON_EXE_OVERRIDE As String = ""
 Private Const SCRIPT_NAME2 As String = "filtra_consolidato_provincia.py"   ' usato da ImportaDatiMensili (v13)
 Private Const SCRIPT_NAME3 As String = "filtra_dcpensioni.py"              ' usato da Filtra
 Private Const SCRIPT_NAME4 As String = "filtra_dcpensioni_regione.py"      ' usato da FiltraRegione
 Private Const SCRIPT_NAME5 As String = "filtra_dcpensioni_provincia.py"    ' usato da FiltraProvincia
-Private Const TEMP_DIR    As String = "C:\Users\spirrone01\AppData\Local\Temp\"
+
+Private mPythonExe As String
+Private mPythonExeResolved As Boolean
 
 ' --- Sottocartelle (relative alla cartella SharePoint sincronizzata) ---
 Private Const SCRIPT_SUBDIR As String = "Scripts\"
@@ -175,6 +182,7 @@ Sub ImportaDatiMensili()
     Dim spRoot As String
     spRoot = GetSharePointRoot()
     If spRoot = "" Then Exit Sub
+    If GetPythonExe() = "" Then Exit Sub
 
     Dim wbDest        As Workbook
     Dim wsConsolidato As Worksheet
@@ -212,8 +220,8 @@ Sub ImportaDatiMensili()
     Application.StatusBar = "Esportazione prodotti e territorio..."
     Dim prodottiCsv As String
     Dim territorioCsv As String
-    prodottiCsv = TEMP_DIR & "dc_prodotti_tmp.csv"
-    territorioCsv = TEMP_DIR & "dc_territorio_tmp.csv"
+    prodottiCsv = GetTempDir() & "dc_prodotti_tmp.csv"
+    territorioCsv = GetTempDir() & "dc_territorio_tmp.csv"
     EsportaProdottiCsv wsProdotti, prodottiCsv
     EsportaFoglioCsv wsTerritorio, territorioCsv
 
@@ -239,9 +247,9 @@ Sub ImportaDatiMensili()
     Dim errPath    As String
     outputCsv = csvDir & xlsxName & "_filtrato_provincia.csv"
     outputXlsx = xlsxDir & xlsxName & "_filtrato_provincia.xlsx"
-    logPath = TEMP_DIR & "dc_filtra.log"
-    batPath = TEMP_DIR & "dc_filtra.bat"
-    errPath = TEMP_DIR & "dc_filtra_err.log"
+    logPath = GetTempDir() & "dc_filtra.log"
+    batPath = GetTempDir() & "dc_filtra.bat"
+    errPath = GetTempDir() & "dc_filtra_err.log"
 
     If Dir(outputCsv) <> "" Then Kill outputCsv
     If Dir(outputXlsx) <> "" Then Kill outputXlsx
@@ -250,7 +258,7 @@ Sub ImportaDatiMensili()
 
     Dim batLine As String
     batLine = "@echo off" & vbCrLf & _
-              """" & PYTHON_EXE & """ " & _
+              """" & GetPythonExe() & """ " & _
               """" & scriptPath & """ " & _
               """" & filePath & """ " & _
               """" & prodottiCsv & """ " & _
@@ -765,6 +773,7 @@ Sub Filtra()
     Dim spRoot As String
     spRoot = GetSharePointRoot()
     If spRoot = "" Then Exit Sub
+    If GetPythonExe() = "" Then Exit Sub
 
     Dim wsProdotti As Worksheet
     Set wsProdotti = ThisWorkbook.Sheets("prodotti")
@@ -795,7 +804,7 @@ Sub Filtra()
     ' 3. ESPORTA PRODOTTI IN CSV TEMPORANEO
     Application.StatusBar = "Esportazione prodotti..."
     Dim prodottiCsv As String
-    prodottiCsv = TEMP_DIR & "dc_prodotti_tmp3.csv"
+    prodottiCsv = GetTempDir() & "dc_prodotti_tmp3.csv"
     EsportaProdottiCsv wsProdotti, prodottiCsv
 
     ' 4. CARTELLA DI OUTPUT (Python vi scrive direttamente il file finale)
@@ -807,9 +816,9 @@ Sub Filtra()
     Dim logPath As String
     Dim batPath As String
     Dim errPath As String
-    logPath = TEMP_DIR & "dc_filtra3.log"
-    batPath = TEMP_DIR & "dc_filtra3.bat"
-    errPath = TEMP_DIR & "dc_filtra3_err.log"
+    logPath = GetTempDir() & "dc_filtra3.log"
+    batPath = GetTempDir() & "dc_filtra3.bat"
+    errPath = GetTempDir() & "dc_filtra3_err.log"
 
     If Dir(logPath) <> "" Then Kill logPath
     If Dir(errPath) <> "" Then Kill errPath
@@ -827,7 +836,7 @@ Sub Filtra()
 
     Dim batLine As String
     batLine = "@echo off" & vbCrLf & _
-              """" & PYTHON_EXE & """ " & _
+              """" & GetPythonExe() & """ " & _
               """" & scriptPath & """ " & _
               """" & filePath & """ " & _
               """" & prodottiCsv & """ " & _
@@ -1068,6 +1077,7 @@ Sub FiltraRegione()
     Dim spRoot As String
     spRoot = GetSharePointRoot()
     If spRoot = "" Then Exit Sub
+    If GetPythonExe() = "" Then Exit Sub
 
     Dim wsProdotti As Worksheet
     Set wsProdotti = ThisWorkbook.Sheets("prodotti")
@@ -1103,7 +1113,7 @@ Sub FiltraRegione()
 
     Application.StatusBar = "Esportazione prodotti..."
     Dim prodottiCsv As String
-    prodottiCsv = TEMP_DIR & "dc_prodotti_tmp4.csv"
+    prodottiCsv = GetTempDir() & "dc_prodotti_tmp4.csv"
     EsportaProdottiCsv wsProdotti, prodottiCsv
 
     Dim xlsxDir As String
@@ -1117,16 +1127,16 @@ Sub FiltraRegione()
     Dim logPath As String
     Dim batPath As String
     Dim errPath As String
-    logPath = TEMP_DIR & "dc_filtra4.log"
-    batPath = TEMP_DIR & "dc_filtra4.bat"
-    errPath = TEMP_DIR & "dc_filtra4_err.log"
+    logPath = GetTempDir() & "dc_filtra4.log"
+    batPath = GetTempDir() & "dc_filtra4.bat"
+    errPath = GetTempDir() & "dc_filtra4_err.log"
 
     If Dir(logPath) <> "" Then Kill logPath
     If Dir(errPath) <> "" Then Kill errPath
 
     Dim batLine As String
     batLine = "@echo off" & vbCrLf & _
-              """" & PYTHON_EXE & """ " & _
+              """" & GetPythonExe() & """ " & _
               """" & scriptPath & """ " & _
               """" & filePath & """ " & _
               """" & prodottiCsv & """ " & _
@@ -1299,6 +1309,7 @@ Sub FiltraProvincia()
     Dim spRoot As String
     spRoot = GetSharePointRoot()
     If spRoot = "" Then Exit Sub
+    If GetPythonExe() = "" Then Exit Sub
 
     Dim wsTerritorio As Worksheet
     Set wsTerritorio = ThisWorkbook.Sheets("territorio")
@@ -1334,7 +1345,7 @@ Sub FiltraProvincia()
 
     Application.StatusBar = "Esportazione territorio..."
     Dim territorioCsv As String
-    territorioCsv = TEMP_DIR & "dc_territorio_tmp5.csv"
+    territorioCsv = GetTempDir() & "dc_territorio_tmp5.csv"
     EsportaFoglioCsv wsTerritorio, territorioCsv
 
     Dim xlsxDir As String
@@ -1348,16 +1359,16 @@ Sub FiltraProvincia()
     Dim logPath As String
     Dim batPath As String
     Dim errPath As String
-    logPath = TEMP_DIR & "dc_filtra5.log"
-    batPath = TEMP_DIR & "dc_filtra5.bat"
-    errPath = TEMP_DIR & "dc_filtra5_err.log"
+    logPath = GetTempDir() & "dc_filtra5.log"
+    batPath = GetTempDir() & "dc_filtra5.bat"
+    errPath = GetTempDir() & "dc_filtra5_err.log"
 
     If Dir(logPath) <> "" Then Kill logPath
     If Dir(errPath) <> "" Then Kill errPath
 
     Dim batLine As String
     batLine = "@echo off" & vbCrLf & _
-              """" & PYTHON_EXE & """ " & _
+              """" & GetPythonExe() & """ " & _
               """" & scriptPath & """ " & _
               """" & filePath & """ " & _
               """" & territorioCsv & """ " & _
@@ -1594,10 +1605,111 @@ End Sub
 
 '==============================================================================
 Sub InstallaDipendenze()
+    Dim py As String
+    py = GetPythonExe()
+    If py = "" Then Exit Sub
     If MsgBox("Verranno installati python-calamine e openpyxl." & vbCrLf & "Continuare?", _
               vbYesNo + vbQuestion, "Installa dipendenze") = vbNo Then Exit Sub
-    Shell "cmd.exe /c " & PYTHON_EXE & " -m pip install python-calamine openpyxl && pause", vbNormalFocus
+    Shell "cmd.exe /c " & py & " -m pip install python-calamine openpyxl && pause", vbNormalFocus
 End Sub
+
+
+'==============================================================================
+' Cartella temporanea per-utente (Environ$("TEMP")): MAI un percorso fisso,
+' perche' conterrebbe lo username di chi ha scritto la macro e non
+' esisterebbe sul PC di un altro utente.
+Private Function GetTempDir() As String
+    Dim t As String
+    t = Environ$("TEMP")
+    If t = "" Then t = Environ$("TMP")
+    If Right(t, 1) <> "\" Then t = t & "\"
+    GetTempDir = t
+End Function
+
+' Risolve (con cache) e restituisce il percorso dell'interprete Python da
+' usare. Analogo a GetSharePointRoot(): niente piu' percorso fisso con lo
+' username in chiaro (non funzionerebbe su un altro PC/utente), individuato
+' invece a runtime cercando "py" (il launcher ufficiale, preferito perche'
+' sceglie da solo la versione installata) o, in mancanza, "python" nel PATH
+' di sistema. Se l'autorilevamento fallisse, valorizza PYTHON_EXE_OVERRIDE.
+Private Function GetPythonExe() As String
+    If mPythonExeResolved Then
+        GetPythonExe = mPythonExe
+        Exit Function
+    End If
+
+    Dim p As String
+    If Len(PYTHON_EXE_OVERRIDE) > 0 Then
+        p = PYTHON_EXE_OVERRIDE
+    Else
+        p = RilevaPythonExe()
+    End If
+
+    If p = "" Then
+        MsgBox "Impossibile individuare automaticamente l'interprete Python (py.exe o python.exe) " & _
+               "nel PATH di sistema." & vbCrLf & vbCrLf & _
+               "Installa Python (da python.org o dal Microsoft Store) assicurandoti che l'opzione " & _
+               """Add python.exe to PATH""/""Aggiungi al PATH"" sia selezionata durante l'installazione." & vbCrLf & vbCrLf & _
+               "In alternativa, valorizza la costante PYTHON_EXE_OVERRIDE in cima al modulo con il " & _
+               "percorso completo di python.exe.", _
+               vbCritical, "Python non trovato"
+    End If
+
+    mPythonExe = p
+    mPythonExeResolved = True
+    GetPythonExe = p
+End Function
+
+' Cerca "py" (launcher ufficiale) e, in mancanza, "python" nel PATH di
+' sistema tramite il comando "where". Restituisce stringa vuota se nessuno
+' dei due e' installato/nel PATH: il chiamante (GetPythonExe) gestisce il
+' fallback mostrando l'errore.
+Private Function RilevaPythonExe() As String
+    On Error GoTo ErrHandler
+
+    Dim batPath As String
+    Dim outPath As String
+    batPath = GetTempDir() & "dc_python_lookup.bat"
+    outPath = GetTempDir() & "dc_python_lookup.txt"
+
+    On Error Resume Next
+    If Dir(batPath) <> "" Then Kill batPath
+    If Dir(outPath) <> "" Then Kill outPath
+    On Error GoTo ErrHandler
+
+    Dim iFile As Integer
+    iFile = FreeFile
+    Open batPath For Output As #iFile
+    Print #iFile, "@echo off"
+    Print #iFile, "(where py || where python) > """ & outPath & """ 2>nul"
+    Close #iFile
+
+    Shell "cmd.exe /c """ & batPath & """", vbHide
+
+    Dim t0 As Single
+    t0 = Timer
+    Do While Dir(outPath) = "" And Timer - t0 < 10
+        DoEvents
+        Application.Wait Now + TimeValue("00:00:01")
+    Loop
+
+    Dim risultato As String
+    risultato = LeggiFile(outPath)
+    ' "where" puo' restituire piu' righe (piu' versioni installate): prendi solo la prima
+    If InStr(risultato, vbCrLf) > 0 Then risultato = Left(risultato, InStr(risultato, vbCrLf) - 1)
+    risultato = Trim(risultato)
+
+    On Error Resume Next
+    If Dir(batPath) <> "" Then Kill batPath
+    If Dir(outPath) <> "" Then Kill outPath
+    On Error GoTo 0
+
+    RilevaPythonExe = risultato
+    Exit Function
+
+ErrHandler:
+    RilevaPythonExe = ""
+End Function
 
 
 '==============================================================================
@@ -1676,8 +1788,8 @@ Private Function RilevaCartellaSharePointSincronizzata(siteMatch As String, libM
 
     Dim psPath As String
     Dim outPath As String
-    psPath = TEMP_DIR & "dc_sp_lookup.ps1"
-    outPath = TEMP_DIR & "dc_sp_lookup.txt"
+    psPath = GetTempDir() & "dc_sp_lookup.ps1"
+    outPath = GetTempDir() & "dc_sp_lookup.txt"
 
     On Error Resume Next
     If Dir(outPath) <> "" Then Kill outPath
