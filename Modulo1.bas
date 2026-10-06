@@ -278,10 +278,9 @@ Private Sub AggiornaMemoCollegati()
     Dim lastM As Long, lastD As Long
     Dim hM As Variant, hD As Variant
     Dim datiM As Variant, datiD As Variant, outArr() As Variant
-    Dim dMap As Object
-    Dim r As Long, i As Long
-    Dim memoCod As String, p As String, seen As String
-    Dim parti As Variant
+    Dim memoCodes() As String, memoReq() As String
+    Dim nM As Long, r As Long, m As Long
+    Dim codD As String, res As String, memoCod As String
 
     Set wsMemo = ThisWorkbook.Worksheets("Memo")
     Set wsDem = ThisWorkbook.Worksheets("Demand")
@@ -297,30 +296,18 @@ Private Sub AggiornaMemoCollegati()
     colDemCod = FindHeaderCol(hD, "Codice richiesta")
     If colMemoCod = 0 Or colMemoReq = 0 Or colDemCod = 0 Then Exit Sub
 
-    Set dMap = CreateObject("Scripting.Dictionary")
-    dMap.CompareMode = vbTextCompare
-
+    'Memo in memoria: codice Memo e testo integrale della colonna "Codice Richiesta"
     lastM = wsMemo.Cells(wsMemo.Rows.Count, colMemoCod).End(xlUp).Row
     If lastM > hdrM Then
         datiM = wsMemo.Range(wsMemo.Cells(hdrM + 1, 1), wsMemo.Cells(lastM, IIf(colMemoCod > colMemoReq, colMemoCod, colMemoReq))).Value
+        ReDim memoCodes(1 To UBound(datiM, 1))
+        ReDim memoReq(1 To UBound(datiM, 1))
         For r = 1 To UBound(datiM, 1)
             memoCod = Trim$(CStr(datiM(r, colMemoCod)))
             If Len(memoCod) > 0 Then
-                parti = Split(Replace(CStr(datiM(r, colMemoReq)), vbLf, ";"), ";")
-                seen = "|"
-                For i = LBound(parti) To UBound(parti)
-                    p = Trim$(parti(i))
-                    If Len(p) > 0 Then
-                        If InStr(1, seen, "|" & p & "|", vbTextCompare) = 0 Then
-                            seen = seen & p & "|"
-                            If dMap.Exists(p) Then
-                                dMap(p) = dMap(p) & ";" & memoCod
-                            Else
-                                dMap(p) = memoCod
-                            End If
-                        End If
-                    End If
-                Next i
+                nM = nM + 1
+                memoCodes(nM) = memoCod
+                memoReq(nM) = UCase$(CStr(datiM(r, colMemoReq)))
             End If
         Next r
     End If
@@ -331,9 +318,18 @@ Private Sub AggiornaMemoCollegati()
     datiD = wsDem.Range(wsDem.Cells(hdrD + 1, colDemCod), wsDem.Cells(lastD, colDemCod)).Value
     ReDim outArr(1 To UBound(datiD, 1), 1 To 1)
     For r = 1 To UBound(datiD, 1)
-        p = Trim$(CStr(datiD(r, 1)))
-        If Len(p) > 0 Then
-            If dMap.Exists(p) Then outArr(r, 1) = dMap(p)
+        codD = UCase$(Trim$(CStr(datiD(r, 1))))
+        If Len(codD) > 0 And nM > 0 Then
+            res = ""
+            For m = 1 To nM
+                'il codice Demand e' semplicemente CONTENUTO nel campo del Memo
+                '(da solo o insieme ad altri codici / testo)
+                If InStr(1, memoReq(m), codD, vbBinaryCompare) > 0 Then
+                    If Len(res) > 0 Then res = res & ";"
+                    res = res & memoCodes(m)
+                End If
+            Next m
+            If Len(res) > 0 Then outArr(r, 1) = res
         End If
     Next r
     wsDem.Range(wsDem.Cells(hdrD + 1, COL_DEMAND_MEMO), wsDem.Cells(lastD, COL_DEMAND_MEMO)).Value = outArr
