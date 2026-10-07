@@ -22,6 +22,9 @@ Private Const COL_DEMAND_AREA As Long = 21   'U
 Private Const COL_MEMO_AREA As Long = 29     'AC
 Private Const MAX_RIGHE_INTESTAZIONE As Long = 15
 
+'date in formato testo non riconosciute nell'ultimo import (per il messaggio finale)
+Private mDateNonConv As Long
+
 Public Sub Importa_Memo_Da_File()
     'Memo: aggiorna/aggiunge le righe dei file importati e CONSERVA le altre
     ImportaArchivio "Memo", "Codice", "Aree richiedenti e coinvolte", COL_MEMO_AREA, False
@@ -51,6 +54,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Dim vec() As Variant
     Dim itemsNew As Variant, outArr() As Variant
     Dim tipoData() As Long
+    Dim isDateCol() As Boolean
 
     Dim hdrRowDst As Long, lastColDst As Long, colCodDst As Long, lastUsed As Long
     Dim hdrRowSrc As Long, lastRowSrc As Long, lastColSrc As Long
@@ -122,18 +126,25 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Set dictScarti = CreateObject("Scripting.Dictionary")
     dictScarti.CompareMode = vbTextCompare
     ReDim tipoData(1 To lastColDst)
+    mDateNonConv = 0
+
+    'colonne data = intestazione che inizia per "Data"
+    ReDim isDateCol(1 To lastColDst)
+    For c = 1 To lastColDst
+        isDateCol(c) = (StrComp(Left$(Trim$(CStr(dstHeaders(1, c))), 4), "Data", vbTextCompare) = 0)
+    Next c
     Set dictRun = CreateObject("Scripting.Dictionary")   'codici scritti da questa esecuzione
     dictRun.CompareMode = vbTextCompare
 
     'modalita' aggiornamento: si parte dalle righe gia' presenti (scritte e scartate)
     If Not sostituisciTutto Then
-        CaricaRighe wsDst, hdrRowDst + 1, colCodDst, lastColDst, dictNew, tipoData
+        CaricaRighe wsDst, hdrRowDst + 1, colCodDst, lastColDst, dictNew, tipoData, isDateCol
         Set wsScartiEsist = Nothing
         On Error Resume Next
         Set wsScartiEsist = ThisWorkbook.Worksheets(LCase$(foglio) & "_scarti")
         On Error GoTo CleanFail
         If Not wsScartiEsist Is Nothing Then
-            CaricaRighe wsScartiEsist, 2, colCodDst, lastColDst, dictScarti, tipoData
+            CaricaRighe wsScartiEsist, 2, colCodDst, lastColDst, dictScarti, tipoData, isDateCol
         End If
     End If
 
@@ -196,6 +207,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
                     For c = 1 To lastColSrc
                         If srcToDst(c) > 0 Then
                             v = dati(r, c)
+                            If isDateCol(srcToDst(c)) Then v = ConvertiData(v)
                             If IsError(v) Then
                                 v = Empty
                             ElseIf VarType(v) = vbString Then
@@ -252,6 +264,11 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
         wsDst.Range(wsDst.Cells(hdrRowDst + 1, 1), wsDst.Cells(lastUsed, lastColDst)).ClearContents
     End If
 
+    'le colonne data hanno sempre formato data (anche se nessun valore e' di tipo data)
+    For c = 1 To lastColDst
+        If isDateCol(c) And tipoData(c) = 0 Then tipoData(c) = 1
+    Next c
+
     n = dictNew.Count
     itemsNew = dictNew.Items
     ReDim outArr(1 To n, 1 To lastColDst)
@@ -285,6 +302,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
            "Righe nel foglio: " & n & vbCrLf & _
            "  dai file: " & (nAgg + nAdd) & " (gia' presenti, sostituite: " & nAgg & "; nuove: " & nAdd & ")" & vbCrLf & _
            "Righe negli scarti (area senza trascodifica): " & nScart & _
+           IIf(mDateNonConv > 0, vbCrLf & "ATTENZIONE: " & mDateNonConv & " date in formato testo non riconosciute (lasciate come testo).", "") & _
            "  -> foglio " & LCase$(foglio) & "_scarti", vbInformation
 
 CleanExit:
@@ -301,11 +319,84 @@ CleanFail:
 End Sub
 
 '------------------------------------------------------------------------------
+' Se v e' un testo che rappresenta una data (gg/mm/aaaa, gg-mm-aaaa, gg.mm.aaaa,
+' aaaa-mm-gg, con eventuale ora hh:mm[:ss]) restituisce una vera data;
+' testo vuoto -> cella vuota; qualsiasi altro valore e' restituito invariato
+' (un testo non riconosciuto viene contato in mDateNonConv).
+'------------------------------------------------------------------------------
+Private Function ConvertiData(ByVal v As Variant) As Variant
+    Dim s As String, sData As String, sOra As String
+    Dim p As Long, i As Long
+    Dim dp As Variant, tp As Variant
+    Dim d As Long, m As Long, y As Long
+    Dim hh As Long, mi As Long, ss As Long
+    Dim dt As Date
+
+    If VarType(v) <> vbString Then
+        ConvertiData = v
+        Exit Function
+    End If
+
+    s = Trim$(Replace(CStr(v), ChrW$(160), " "))
+    If Len(s) = 0 Then
+        ConvertiData = Empty
+        Exit Function
+    End If
+
+    s = Replace(s, "T", " ")
+    p = InStr(s, " ")
+    If p > 0 Then
+        sData = Left$(s, p - 1)
+        sOra = Trim$(Mid$(s, p + 1))
+    Else
+        sData = s
+    End If
+
+    sData = Replace(Replace(sData, "-", "/"), ".", "/")
+    dp = Split(sData, "/")
+    If UBound(dp) <> 2 Then GoTo NonRiconosciuta
+    For i = 0 To 2
+        If Not IsNumeric(dp(i)) Or Len(dp(i)) = 0 Then GoTo NonRiconosciuta
+        If InStr(dp(i), ",") > 0 Then GoTo NonRiconosciuta
+    Next i
+
+    If Len(dp(0)) = 4 Then
+        y = CLng(dp(0)): m = CLng(dp(1)): d = CLng(dp(2))
+    Else
+        d = CLng(dp(0)): m = CLng(dp(1)): y = CLng(dp(2))
+        If y < 100 Then y = y + 2000
+    End If
+    If y < 1900 Or y > 2200 Or m < 1 Or m > 12 Or d < 1 Or d > 31 Then GoTo NonRiconosciuta
+    dt = DateSerial(y, m, d)
+    If Month(dt) <> m Then GoTo NonRiconosciuta   'es. 31/02
+
+    If Len(sOra) > 0 Then
+        tp = Split(sOra, ":")
+        If UBound(tp) < 1 Or UBound(tp) > 2 Then GoTo NonRiconosciuta
+        For i = 0 To UBound(tp)
+            If Not IsNumeric(tp(i)) Then GoTo NonRiconosciuta
+        Next i
+        hh = CLng(tp(0)): mi = CLng(tp(1))
+        If UBound(tp) = 2 Then ss = CLng(tp(2))
+        If hh > 23 Or mi > 59 Or ss > 59 Then GoTo NonRiconosciuta
+        dt = dt + TimeSerial(hh, mi, ss)
+    End If
+
+    ConvertiData = dt
+    Exit Function
+
+NonRiconosciuta:
+    mDateNonConv = mDateNonConv + 1
+    ConvertiData = v
+End Function
+
+'------------------------------------------------------------------------------
 ' Carica in un dizionario (codice -> riga nel layout del foglio) le righe gia'
 ' presenti in un foglio, a partire da primaRiga
 '------------------------------------------------------------------------------
 Private Sub CaricaRighe(ByVal ws As Worksheet, ByVal primaRiga As Long, ByVal colCod As Long, _
-                        ByVal lastCol As Long, ByVal d As Object, ByRef tipoData() As Long)
+                        ByVal lastCol As Long, ByVal d As Object, ByRef tipoData() As Long, _
+                        ByRef isDateCol() As Boolean)
     Dim lastRow As Long, r As Long, c As Long
     Dim dati As Variant, vec() As Variant
     Dim codice As String
@@ -321,6 +412,7 @@ Private Sub CaricaRighe(ByVal ws As Worksheet, ByVal primaRiga As Long, ByVal co
             ReDim vec(1 To lastCol)
             For c = 1 To lastCol
                 v = dati(r, c)
+                If isDateCol(c) Then v = ConvertiData(v)
                 If IsError(v) Then
                     v = Empty
                 ElseIf VarType(v) = vbString Then
