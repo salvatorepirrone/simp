@@ -41,7 +41,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Dim nomiFile As String
     Dim iFile As Long
 
-    Dim dictTrasc As Object, dictOld As Object, dictNew As Object
+    Dim dictTrasc As Object, dictOld As Object, dictNew As Object, dictScarti As Object
     Dim dstHeaders As Variant, srcHeaders As Variant, dati As Variant
     Dim srcToDst() As Long
     Dim vec() As Variant
@@ -114,6 +114,8 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
 
     Set dictNew = CreateObject("Scripting.Dictionary")
     dictNew.CompareMode = vbTextCompare
+    Set dictScarti = CreateObject("Scripting.Dictionary")
+    dictScarti.CompareMode = vbTextCompare
     ReDim tipoData(1 To lastColDst)
 
     '--- legge tutti i file in memoria (la destinazione non viene toccata finche'
@@ -170,31 +172,35 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
                     areaSrc = CStr(dati(r, colAreaSrc))
                     areaDst = TrascodificaAree(areaSrc, dictTrasc)
 
-                    If Len(areaDst) = 0 Then
-                        'nessuna trascodifica: record non scritto
-                        nScart = nScart + 1
-                        If dictNew.Exists(codice) Then dictNew.Remove codice
-                    Else
-                        ReDim vec(1 To lastColDst)
-                        For c = 1 To lastColSrc
-                            If srcToDst(c) > 0 Then
-                                v = dati(r, c)
-                                If IsError(v) Then
-                                    v = Empty
-                                ElseIf VarType(v) = vbString Then
-                                    If Left$(v, 1) = "=" Then v = "'" & v
-                                ElseIf VarType(v) = vbDate Then
-                                    If CDbl(v) <> Int(CDbl(v)) Then
-                                        tipoData(srcToDst(c)) = 2
-                                    ElseIf tipoData(srcToDst(c)) = 0 Then
-                                        tipoData(srcToDst(c)) = 1
-                                    End If
+                    'riga nel layout del foglio di destinazione
+                    ReDim vec(1 To lastColDst)
+                    For c = 1 To lastColSrc
+                        If srcToDst(c) > 0 Then
+                            v = dati(r, c)
+                            If IsError(v) Then
+                                v = Empty
+                            ElseIf VarType(v) = vbString Then
+                                If Left$(v, 1) = "=" Then v = "'" & v
+                            ElseIf VarType(v) = vbDate Then
+                                If CDbl(v) <> Int(CDbl(v)) Then
+                                    tipoData(srcToDst(c)) = 2
+                                ElseIf tipoData(srcToDst(c)) = 0 Then
+                                    tipoData(srcToDst(c)) = 1
                                 End If
-                                vec(srcToDst(c)) = v
                             End If
-                        Next c
+                            vec(srcToDst(c)) = v
+                        End If
+                    Next c
+
+                    If Len(areaDst) = 0 Then
+                        'nessuna trascodifica: record non scritto nel foglio,
+                        'ma riportato nel foglio degli scarti per verifica
+                        If dictNew.Exists(codice) Then dictNew.Remove codice
+                        dictScarti(codice) = vec
+                    Else
                         vec(colAreaDst) = areaDst
                         dictNew(codice) = vec
+                        If dictScarti.Exists(codice) Then dictScarti.Remove codice
                     End If
                 End If
             Next r
@@ -210,6 +216,8 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
                "Nessuna modifica effettuata.", vbExclamation
         GoTo CleanExit
     End If
+
+    nScart = dictScarti.Count
 
     '--- statistiche
     For Each v In dictNew.Keys
@@ -241,6 +249,9 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Next c
     wsDst.Range(wsDst.Cells(hdrRowDst + 1, 1), wsDst.Cells(hdrRowDst + n, lastColDst)).Value = outArr
 
+    '--- righe scartate -> foglio "<archivio>_scarti" (stesso layout del foglio di destinazione)
+    ScriviScarti LCase$(foglio) & "_scarti", wsDst, hdrRowDst, lastColDst, dictScarti, tipoData
+
     '--- colonna "memo collegati" del foglio Demand (T), sempre riallineata
     '    sia dopo l'import di Demand sia dopo quello di Memo
     AggiornaMemoCollegati
@@ -252,7 +263,8 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
            "Righe scritte: " & n & vbCrLf & _
            "  gia' presenti (sostituite): " & nAgg & vbCrLf & _
            "  nuove: " & nAdd & vbCrLf & _
-           "Righe scartate (area senza trascodifica): " & nScart, vbInformation
+           "Righe scartate (area senza trascodifica): " & nScart & _
+           "  -> foglio " & LCase$(foglio) & "_scarti", vbInformation
 
 CleanExit:
     On Error Resume Next
@@ -265,6 +277,54 @@ CleanExit:
 CleanFail:
     MsgBox "Errore durante l'import: " & Err.Number & " - " & Err.Description, vbCritical
     Resume CleanExit
+End Sub
+
+'------------------------------------------------------------------------------
+' Scrive i record scartati nel foglio indicato (lo crea se non esiste),
+' sostituendone il contenuto. Intestazione copiata dal foglio di destinazione
+' (riga 1); la colonna "Area richiedente omogeneizzata" resta vuota, l'area
+' originale e' nella colonna di area del file sorgente.
+'------------------------------------------------------------------------------
+Private Sub ScriviScarti(ByVal nomeFoglio As String, ByVal wsDst As Worksheet, _
+                         ByVal hdrRowDst As Long, ByVal lastColDst As Long, _
+                         ByVal dictScarti As Object, ByRef tipoData() As Long)
+    Dim ws As Worksheet
+    Dim itemsS As Variant, outArr() As Variant, vec() As Variant
+    Dim n As Long, k As Long, c As Long
+
+    On Error Resume Next
+    Set ws = ThisWorkbook.Worksheets(nomeFoglio)
+    On Error GoTo 0
+    If ws Is Nothing Then
+        Set ws = ThisWorkbook.Worksheets.Add(After:=ThisWorkbook.Worksheets(ThisWorkbook.Worksheets.Count))
+        ws.Name = nomeFoglio
+    End If
+
+    ws.Cells.ClearContents
+    ws.Range(ws.Cells(1, 1), ws.Cells(1, lastColDst)).Value = _
+        wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value
+    ws.Range(ws.Cells(1, 1), ws.Cells(1, lastColDst)).Font.Bold = True
+
+    n = dictScarti.Count
+    If n = 0 Then Exit Sub
+
+    itemsS = dictScarti.Items
+    ReDim outArr(1 To n, 1 To lastColDst)
+    For k = 0 To n - 1
+        vec = itemsS(k)
+        For c = 1 To lastColDst
+            outArr(k + 1, c) = vec(c)
+        Next c
+    Next k
+
+    For c = 1 To lastColDst
+        If tipoData(c) = 2 Then
+            ws.Range(ws.Cells(2, c), ws.Cells(n + 1, c)).NumberFormat = "dd/mm/yyyy hh:mm"
+        ElseIf tipoData(c) = 1 Then
+            ws.Range(ws.Cells(2, c), ws.Cells(n + 1, c)).NumberFormat = "dd/mm/yyyy"
+        End If
+    Next c
+    ws.Range(ws.Cells(2, 1), ws.Cells(n + 1, lastColDst)).Value = outArr
 End Sub
 
 '------------------------------------------------------------------------------
