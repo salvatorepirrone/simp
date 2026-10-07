@@ -580,12 +580,11 @@ End Function
 
 '------------------------------------------------------------------------------
 ' Trascodifica un valore di area. Se il campo contiene piu' aree separate da ";"
-' si prende SOLO LA PRIMA (in ordine di elenco) che ha una trascodifica.
-' Stringa vuota se nessuna area ha una trascodifica.
+' si considera SOLO LA PRIMA: se non ha una trascodifica il record e' scartato
+' (stringa vuota), anche se le aree successive ne avrebbero una.
 '------------------------------------------------------------------------------
 Private Function TrascodificaAree(ByVal areaSrc As String, ByVal dictT As Object) As String
     Dim parti As Variant
-    Dim i As Long
     Dim k As String
 
     k = NormKey(areaSrc)
@@ -598,15 +597,10 @@ Private Function TrascodificaAree(ByVal areaSrc As String, ByVal dictT As Object
     End If
 
     parti = Split(areaSrc, ";")
-    For i = LBound(parti) To UBound(parti)
-        k = NormKey(CStr(parti(i)))
-        If Len(k) > 0 Then
-            If dictT.Exists(k) Then
-                TrascodificaAree = dictT(k)
-                Exit Function
-            End If
-        End If
-    Next i
+    k = NormKey(CStr(parti(LBound(parti))))
+    If Len(k) > 0 Then
+        If dictT.Exists(k) Then TrascodificaAree = dictT(k)
+    End If
 End Function
 
 '------------------------------------------------------------------------------
