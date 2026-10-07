@@ -23,25 +23,29 @@ Private Const COL_MEMO_AREA As Long = 29     'AC
 Private Const MAX_RIGHE_INTESTAZIONE As Long = 15
 
 Public Sub Importa_Memo_Da_File()
-    ImportaArchivio "Memo", "Codice", "Aree richiedenti e coinvolte", COL_MEMO_AREA
+    'Memo: sostituzione integrale delle righe esistenti
+    ImportaArchivio "Memo", "Codice", "Aree richiedenti e coinvolte", COL_MEMO_AREA, True
 End Sub
 
 Public Sub Importa_Demand_Da_File()
-    ImportaArchivio "Demand", "Codice richiesta", "Area Richiedente", COL_DEMAND_AREA
+    'Demand: aggiorna/aggiunge le righe dei file importati e CONSERVA le altre
+    '(cosi' si possono importare i file data uno alla volta)
+    ImportaArchivio "Demand", "Codice richiesta", "Area Richiedente", COL_DEMAND_AREA, False
 End Sub
 
 '------------------------------------------------------------------------------
 ' Routine comune di importazione
 '------------------------------------------------------------------------------
 Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
-                            ByVal hdrAreaSrc As String, ByVal colAreaDst As Long)
+                            ByVal hdrAreaSrc As String, ByVal colAreaDst As Long, _
+                            ByVal sostituisciTutto As Boolean)
     Dim wsDst As Worksheet, wsReport As Worksheet
     Dim wbSrc As Workbook, wsSrc As Worksheet
     Dim fd As FileDialog
     Dim nomiFile As String
     Dim iFile As Long
 
-    Dim dictTrasc As Object, dictOld As Object, dictNew As Object, dictScarti As Object
+    Dim dictTrasc As Object, dictOld As Object, dictNew As Object, dictScarti As Object, dictRun As Object
     Dim dstHeaders As Variant, srcHeaders As Variant, dati As Variant
     Dim srcToDst() As Long
     Dim vec() As Variant
@@ -56,6 +60,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Dim v As Variant
     Dim nAgg As Long, nAdd As Long, nScart As Long
     Dim ok As Boolean
+    Dim wsScartiEsist As Worksheet
 
     On Error GoTo CleanFail
 
@@ -117,6 +122,20 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Set dictScarti = CreateObject("Scripting.Dictionary")
     dictScarti.CompareMode = vbTextCompare
     ReDim tipoData(1 To lastColDst)
+    Set dictRun = CreateObject("Scripting.Dictionary")   'codici scritti da questa esecuzione
+    dictRun.CompareMode = vbTextCompare
+
+    'modalita' aggiornamento: si parte dalle righe gia' presenti (scritte e scartate)
+    If Not sostituisciTutto Then
+        CaricaRighe wsDst, hdrRowDst + 1, colCodDst, lastColDst, dictNew, tipoData
+        Set wsScartiEsist = Nothing
+        On Error Resume Next
+        Set wsScartiEsist = ThisWorkbook.Worksheets(LCase$(foglio) & "_scarti")
+        On Error GoTo CleanFail
+        If Not wsScartiEsist Is Nothing Then
+            CaricaRighe wsScartiEsist, 2, colCodDst, lastColDst, dictScarti, tipoData
+        End If
+    End If
 
     '--- legge tutti i file in memoria (la destinazione non viene toccata finche'
     '    tutti i file non sono stati letti correttamente)
@@ -196,10 +215,12 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
                         'nessuna trascodifica: record non scritto nel foglio,
                         'ma riportato nel foglio degli scarti per verifica
                         If dictNew.Exists(codice) Then dictNew.Remove codice
+                        If dictRun.Exists(codice) Then dictRun.Remove codice
                         dictScarti(codice) = vec
                     Else
                         vec(colAreaDst) = areaDst
                         dictNew(codice) = vec
+                        dictRun(codice) = True
                         If dictScarti.Exists(codice) Then dictScarti.Remove codice
                     End If
                 End If
@@ -211,7 +232,7 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     Next iFile
 
     '--- nulla da scrivere: non si cancella niente (probabile file sbagliato)
-    If dictNew.Count = 0 Then
+    If dictRun.Count = 0 Then
         MsgBox "Nessun record dei file selezionati ha una trascodifica dell'area." & vbCrLf & _
                "Nessuna modifica effettuata.", vbExclamation
         GoTo CleanExit
@@ -220,11 +241,12 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     nScart = dictScarti.Count
 
     '--- statistiche
-    For Each v In dictNew.Keys
+    For Each v In dictRun.Keys
         If dictOld.Exists(CStr(v)) Then nAgg = nAgg + 1 Else nAdd = nAdd + 1
     Next v
 
-    '--- sostituzione integrale delle righe esistenti
+    '--- riscrittura del foglio (in modalita' aggiornamento dictNew contiene
+    '    anche le righe preesistenti non presenti nei file importati)
     lastUsed = wsDst.UsedRange.Row + wsDst.UsedRange.Rows.Count - 1
     If lastUsed > hdrRowDst Then
         wsDst.Range(wsDst.Cells(hdrRowDst + 1, 1), wsDst.Cells(lastUsed, lastColDst)).ClearContents
@@ -260,10 +282,9 @@ Private Sub ImportaArchivio(ByVal foglio As String, ByVal hdrCodice As String, _
     ok = True
 
     MsgBox "Import completato nel foglio " & foglio & "." & vbCrLf & _
-           "Righe scritte: " & n & vbCrLf & _
-           "  gia' presenti (sostituite): " & nAgg & vbCrLf & _
-           "  nuove: " & nAdd & vbCrLf & _
-           "Righe scartate (area senza trascodifica): " & nScart & _
+           "Righe nel foglio: " & n & vbCrLf & _
+           "  dai file: " & (nAgg + nAdd) & " (gia' presenti, sostituite: " & nAgg & "; nuove: " & nAdd & ")" & vbCrLf & _
+           "Righe negli scarti (area senza trascodifica): " & nScart & _
            "  -> foglio " & LCase$(foglio) & "_scarti", vbInformation
 
 CleanExit:
@@ -277,6 +298,45 @@ CleanExit:
 CleanFail:
     MsgBox "Errore durante l'import: " & Err.Number & " - " & Err.Description, vbCritical
     Resume CleanExit
+End Sub
+
+'------------------------------------------------------------------------------
+' Carica in un dizionario (codice -> riga nel layout del foglio) le righe gia'
+' presenti in un foglio, a partire da primaRiga
+'------------------------------------------------------------------------------
+Private Sub CaricaRighe(ByVal ws As Worksheet, ByVal primaRiga As Long, ByVal colCod As Long, _
+                        ByVal lastCol As Long, ByVal d As Object, ByRef tipoData() As Long)
+    Dim lastRow As Long, r As Long, c As Long
+    Dim dati As Variant, vec() As Variant
+    Dim codice As String
+    Dim v As Variant
+
+    lastRow = ws.Cells(ws.Rows.Count, colCod).End(xlUp).Row
+    If lastRow < primaRiga Then Exit Sub
+
+    dati = ws.Range(ws.Cells(primaRiga, 1), ws.Cells(lastRow, lastCol)).Value
+    For r = 1 To UBound(dati, 1)
+        codice = Trim$(CStr(dati(r, colCod)))
+        If Len(codice) > 0 Then
+            ReDim vec(1 To lastCol)
+            For c = 1 To lastCol
+                v = dati(r, c)
+                If IsError(v) Then
+                    v = Empty
+                ElseIf VarType(v) = vbString Then
+                    If Left$(v, 1) = "=" Then v = "'" & v
+                ElseIf VarType(v) = vbDate Then
+                    If CDbl(v) <> Int(CDbl(v)) Then
+                        tipoData(c) = 2
+                    ElseIf tipoData(c) = 0 Then
+                        tipoData(c) = 1
+                    End If
+                End If
+                vec(c) = v
+            Next c
+            d(codice) = vec
+        End If
+    Next r
 End Sub
 
 '------------------------------------------------------------------------------
