@@ -579,14 +579,14 @@ Private Function CaricaTrascodifica(ByVal archivio As String) As Object
 End Function
 
 '------------------------------------------------------------------------------
-' Trascodifica un valore di area (eventualmente multiplo, separato da ";").
-' Restituisce i soli valori trascodificabili (senza duplicati) separati da "; ";
-' stringa vuota se nessun valore ha una trascodifica.
+' Trascodifica un valore di area. Se il campo contiene piu' aree separate da ";"
+' si prende SOLO LA PRIMA (in ordine di elenco) che ha una trascodifica.
+' Stringa vuota se nessuna area ha una trascodifica.
 '------------------------------------------------------------------------------
 Private Function TrascodificaAree(ByVal areaSrc As String, ByVal dictT As Object) As String
     Dim parti As Variant
     Dim i As Long
-    Dim k As String, v As String, res As String, seen As String
+    Dim k As String
 
     k = NormKey(areaSrc)
     If Len(k) = 0 Then Exit Function
@@ -598,22 +598,15 @@ Private Function TrascodificaAree(ByVal areaSrc As String, ByVal dictT As Object
     End If
 
     parti = Split(areaSrc, ";")
-    seen = "|"
     For i = LBound(parti) To UBound(parti)
         k = NormKey(CStr(parti(i)))
         If Len(k) > 0 Then
             If dictT.Exists(k) Then
-                v = dictT(k)
-                If InStr(1, seen, "|" & v & "|", vbTextCompare) = 0 Then
-                    seen = seen & v & "|"
-                    If Len(res) > 0 Then res = res & "; "
-                    res = res & v
-                End If
+                TrascodificaAree = dictT(k)
+                Exit Function
             End If
         End If
     Next i
-
-    TrascodificaAree = res
 End Function
 
 '------------------------------------------------------------------------------
