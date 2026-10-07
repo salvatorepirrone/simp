@@ -4,10 +4,10 @@ Option Explicit
 '==============================================================================
 ' Importazione periodica di Memo (file "Progetti") e Demand (file "data")
 '
-' - SOSTITUZIONE INTEGRALE: le righe esistenti del foglio di destinazione
-'   (dalla riga sotto l'intestazione in poi) vengono cancellate e riscritte
-'   con il contenuto dei file selezionati (e' possibile selezionarne piu' di
-'   uno: se lo stesso codice compare piu' volte, vale l'ultima occorrenza).
+' - AGGIORNAMENTO: le righe dei file selezionati (anche piu' di uno) sostituiscono
+'   quelle con lo stesso codice o vengono aggiunte; le righe del foglio che non
+'   compaiono nei file importati NON vengono cancellate. Se lo stesso codice
+'   compare piu' volte, vale l'ultima occorrenza.
 ' - Vengono scritti SOLO i record per i quali esiste la trascodifica dell'area
 '   nel foglio "Aree_trascodifica" (colonna A = archivio "Memo" / "Demand",
 '   colonna B = valore da cercare, colonna C = valore trascodificato).
@@ -23,8 +23,8 @@ Private Const COL_MEMO_AREA As Long = 29     'AC
 Private Const MAX_RIGHE_INTESTAZIONE As Long = 15
 
 Public Sub Importa_Memo_Da_File()
-    'Memo: sostituzione integrale delle righe esistenti
-    ImportaArchivio "Memo", "Codice", "Aree richiedenti e coinvolte", COL_MEMO_AREA, True
+    'Memo: aggiorna/aggiunge le righe dei file importati e CONSERVA le altre
+    ImportaArchivio "Memo", "Codice", "Aree richiedenti e coinvolte", COL_MEMO_AREA, False
 End Sub
 
 Public Sub Importa_Demand_Da_File()
