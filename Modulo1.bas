@@ -705,10 +705,17 @@ End Sub
 '   riga del file importato).
 ' - Le colonne "Data ..." in formato testo vengono convertite in vere date.
 ' - Se lo stesso codice compare piu' volte nel file vale l'ultima occorrenza.
+' - Area trascodificata: dal campo "Aree richiedenti e coinvolte" si prende la PRIMA
+'   area e la si trascodifica con Aree_trascodifica (archivio "Memo"); il valore va
+'   nella colonna "Area richiedente omogeneizzata" (se manca, nella prima colonna
+'   libera a destra). I record senza trascodifica vengono importati con la cella vuota.
 '==============================================================================
 Public Sub Importa_DemandNew_Da_File()
     Const FOGLIO As String = "demand_new"
     Const HDR_COD As String = "Codice Richiesta"
+    Const HDR_AREA_SRC As String = "Aree richiedenti e coinvolte"   'colonna del file da trascodificare
+    Const ARCHIVIO_TRASC As String = "Memo"                         'archivio in Aree_trascodifica
+    Const HDR_AREA_DST As String = "Area richiedente omogeneizzata"
 
     Dim wsDst As Worksheet, wsReport As Worksheet
     Dim wbSrc As Workbook, wsSrc As Worksheet
@@ -731,6 +738,10 @@ Public Sub Importa_DemandNew_Da_File()
     Dim v As Variant
     Dim nAgg As Long, nAdd As Long, nIgnorate As Long
     Dim creaIntestazione As Boolean
+    Dim dictTrasc As Object
+    Dim colAreaSrc As Long, colAreaDst As Long
+    Dim areaDst As String
+    Dim nSenzaTrasc As Long
 
     On Error GoTo CleanFail
 
@@ -743,6 +754,13 @@ Public Sub Importa_DemandNew_Da_File()
         Exit Sub
     End If
     Set wsReport = ThisWorkbook.Worksheets("Report")
+
+    '--- tabella di trascodifica delle aree
+    Set dictTrasc = CaricaTrascodifica(ARCHIVIO_TRASC)
+    If dictTrasc.Count = 0 Then
+        MsgBox "Nel foglio 'Aree_trascodifica' non ci sono trascodifiche per l'archivio '" & ARCHIVIO_TRASC & "'.", vbCritical
+        Exit Sub
+    End If
 
     '--- scelta file (anche multipla)
     Set fd = Application.FileDialog(msoFileDialogFilePicker)
@@ -803,21 +821,29 @@ Public Sub Importa_DemandNew_Da_File()
         srcHeaders = wsSrc.Range(wsSrc.Cells(hdrRowSrc, 1), wsSrc.Cells(hdrRowSrc, lastColSrc)).Value
 
         'foglio vuoto: l'intestazione di destinazione e' quella del primo file
-        If creaIntestazione Then
-            dstHeaders = srcHeaders
-            lastColDst = lastColSrc
-            creaIntestazione = False
-            ReDim tipoData(1 To lastColDst)
-            ReDim isDateCol(1 To lastColDst)
-            For c = 1 To lastColDst
-                isDateCol(c) = (StrComp(Left$(Trim$(CStr(dstHeaders(1, c))), 4), "Data", vbTextCompare) = 0)
-            Next c
-            colCodDst = FindHeaderCol(dstHeaders, HDR_COD)
-            wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value = dstHeaders
-            wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Font.Bold = True
-        ElseIf iFile = 1 Then
-            lastColDst = wsDst.Cells(hdrRowDst, wsDst.Columns.Count).End(xlToLeft).Column
+        If creaIntestazione Or iFile = 1 Then
+            If creaIntestazione Then
+                'foglio vuoto: l'intestazione di destinazione e' quella del primo file
+                lastColDst = lastColSrc
+                wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value = srcHeaders
+                wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Font.Bold = True
+                creaIntestazione = False
+            Else
+                lastColDst = wsDst.Cells(hdrRowDst, wsDst.Columns.Count).End(xlToLeft).Column
+            End If
             dstHeaders = wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value
+
+            'colonna con l'area trascodificata: quella con l'intestazione dedicata,
+            'altrimenti la prima colonna libera a destra
+            colAreaDst = FindHeaderCol(dstHeaders, HDR_AREA_DST)
+            If colAreaDst = 0 Then
+                lastColDst = lastColDst + 1
+                colAreaDst = lastColDst
+                wsDst.Cells(hdrRowDst, colAreaDst).Value = HDR_AREA_DST
+                wsDst.Cells(hdrRowDst, colAreaDst).Font.Bold = True
+                dstHeaders = wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value
+            End If
+
             colCodDst = FindHeaderCol(dstHeaders, HDR_COD)
             ReDim tipoData(1 To lastColDst)
             ReDim isDateCol(1 To lastColDst)
@@ -833,6 +859,7 @@ Public Sub Importa_DemandNew_Da_File()
         End If
 
         colCodSrc = FindHeaderCol(srcHeaders, HDR_COD)
+        colAreaSrc = FindHeaderCol(srcHeaders, HDR_AREA_SRC)
 
         'mappa colonne sorgente -> destinazione tramite intestazione
         ReDim srcToDst(1 To lastColSrc)
@@ -840,6 +867,7 @@ Public Sub Importa_DemandNew_Da_File()
             srcToDst(c) = 0
             If Len(Trim$(CStr(srcHeaders(1, c)))) > 0 Then
                 srcToDst(c) = FindHeaderCol(dstHeaders, CStr(srcHeaders(1, c)))
+                If srcToDst(c) = colAreaDst Then srcToDst(c) = 0
                 If srcToDst(c) = 0 Then
                     If InStr(1, colNonTrovate & "|", "|" & CStr(srcHeaders(1, c)) & "|", vbTextCompare) = 0 Then
                         colNonTrovate = colNonTrovate & "|" & CStr(srcHeaders(1, c))
@@ -878,6 +906,14 @@ Public Sub Importa_DemandNew_Da_File()
                                 vec(srcToDst(c)) = v
                             End If
                         Next c
+                        'area trascodificata (prima area del campo); vuota se non trascodificabile
+                        areaDst = ""
+                        If colAreaSrc > 0 Then areaDst = TrascodificaAree(CStr(dati(r, colAreaSrc)), dictTrasc)
+                        If Len(areaDst) > 0 Then
+                            vec(colAreaDst) = areaDst
+                        Else
+                            nSenzaTrasc = nSenzaTrasc + 1
+                        End If
                         dictNew(codice) = vec      'sovrascrive se esiste, altrimenti aggiunge
                         dictRun(codice) = True
                     End If
@@ -934,6 +970,8 @@ Public Sub Importa_DemandNew_Da_File()
     MsgBox "Import completato nel foglio " & FOGLIO & "." & vbCrLf & _
            "Righe nel foglio: " & n & vbCrLf & _
            "  dai file: " & dictRun.Count & " (sovrascritte: " & nAgg & "; nuove: " & nAdd & ")" & _
+           vbCrLf & "Righe senza area trascodificabile (colonna '" & HDR_AREA_DST & "' vuota): " & nSenzaTrasc & _
+           IIf(colAreaSrc = 0, vbCrLf & "ATTENZIONE: nel file manca la colonna '" & HDR_AREA_SRC & "'.", "") & _
            IIf(Len(colNonTrovate) > 0, vbCrLf & "Colonne del file non presenti nel foglio (non importate): " & Replace(Mid$(colNonTrovate, 2), "|", ", "), "") & _
            IIf(mDateNonConv > 0, vbCrLf & "ATTENZIONE: " & mDateNonConv & " date in formato testo non riconosciute (lasciate come testo).", ""), _
            vbInformation
