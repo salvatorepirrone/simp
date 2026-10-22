@@ -692,3 +692,261 @@ Private Sub ScriviLogReport(ByVal ws As Worksheet, ByVal dt As Date, ByVal fileN
     ws.Cells(nextRow, 5).Value = added
     ws.Cells(nextRow, 6).Value = scartate
 End Sub
+
+'==============================================================================
+' Importazione file "Progetti" (struttura con "Codice Richiesta" come chiave)
+' nel foglio demand_new
+'
+' - Chiave: "Codice Richiesta". Le righe del foglio con lo stesso codice del file
+'   importato vengono SOVRASCRITTE, quelle nuove vengono aggiunte in fondo, quelle
+'   che non compaiono nel file NON vengono eliminate.
+' - Le colonne sono abbinate tramite l'intestazione (il foglio demand_new deve avere
+'   la riga di intestazione; se e' completamente vuoto, viene creata dalla prima
+'   riga del file importato).
+' - Le colonne "Data ..." in formato testo vengono convertite in vere date.
+' - Se lo stesso codice compare piu' volte nel file vale l'ultima occorrenza.
+'==============================================================================
+Public Sub Importa_DemandNew_Da_File()
+    Const FOGLIO As String = "demand_new"
+    Const HDR_COD As String = "Codice Richiesta"
+
+    Dim wsDst As Worksheet, wsReport As Worksheet
+    Dim wbSrc As Workbook, wsSrc As Worksheet
+    Dim fd As FileDialog
+    Dim nomiFile As String, colNonTrovate As String
+    Dim iFile As Long
+
+    Dim dictNew As Object, dictRun As Object, dictOld As Object
+    Dim dstHeaders As Variant, srcHeaders As Variant, dati As Variant
+    Dim srcToDst() As Long
+    Dim vec() As Variant
+    Dim itemsNew As Variant, outArr() As Variant
+    Dim tipoData() As Long
+    Dim isDateCol() As Boolean
+
+    Dim hdrRowDst As Long, lastColDst As Long, colCodDst As Long, lastUsed As Long
+    Dim hdrRowSrc As Long, lastRowSrc As Long, lastColSrc As Long, colCodSrc As Long
+    Dim c As Long, r As Long, k As Long, n As Long
+    Dim codice As String
+    Dim v As Variant
+    Dim nAgg As Long, nAdd As Long, nIgnorate As Long
+    Dim creaIntestazione As Boolean
+
+    On Error GoTo CleanFail
+
+    Set wsDst = Nothing
+    On Error Resume Next
+    Set wsDst = ThisWorkbook.Worksheets(FOGLIO)
+    On Error GoTo CleanFail
+    If wsDst Is Nothing Then
+        MsgBox "Non trovo il foglio '" & FOGLIO & "'.", vbCritical
+        Exit Sub
+    End If
+    Set wsReport = ThisWorkbook.Worksheets("Report")
+
+    '--- scelta file (anche multipla)
+    Set fd = Application.FileDialog(msoFileDialogFilePicker)
+    With fd
+        .Title = "Seleziona il/i file da importare nel foglio " & FOGLIO
+        .Filters.Clear
+        .Filters.Add "Excel", "*.xlsx; *.xlsm; *.xls"
+        .AllowMultiSelect = True
+        If .Show <> -1 Then Exit Sub
+    End With
+
+    '--- intestazione di destinazione
+    hdrRowDst = TrovaRigaIntestazione(wsDst, HDR_COD, MAX_RIGHE_INTESTAZIONE)
+    If hdrRowDst = 0 Then
+        If Application.WorksheetFunction.CountA(wsDst.Cells) = 0 Then
+            hdrRowDst = 1
+            creaIntestazione = True     'foglio vuoto: intestazione dal primo file
+        Else
+            MsgBox "Nel foglio '" & FOGLIO & "' non trovo l'intestazione '" & HDR_COD & "'.", vbCritical
+            Exit Sub
+        End If
+    End If
+
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.Calculation = xlCalculationManual
+
+    Set dictNew = CreateObject("Scripting.Dictionary")
+    dictNew.CompareMode = vbTextCompare
+    Set dictRun = CreateObject("Scripting.Dictionary")
+    dictRun.CompareMode = vbTextCompare
+    Set dictOld = CreateObject("Scripting.Dictionary")
+    dictOld.CompareMode = vbTextCompare
+    mDateNonConv = 0
+
+    '--- legge i file in memoria (il foglio non viene toccato finche' non sono
+    '    stati letti tutti correttamente)
+    For iFile = 1 To fd.SelectedItems.Count
+        If Len(nomiFile) > 0 Then nomiFile = nomiFile & ", "
+        nomiFile = nomiFile & Dir(fd.SelectedItems(iFile))
+
+        Set wbSrc = Workbooks.Open(fileName:=fd.SelectedItems(iFile), ReadOnly:=True, UpdateLinks:=0)
+
+        Set wsSrc = Nothing
+        On Error Resume Next
+        Set wsSrc = wbSrc.Worksheets("Export")
+        On Error GoTo CleanFail
+        If wsSrc Is Nothing Then Set wsSrc = wbSrc.Worksheets(1)
+
+        hdrRowSrc = TrovaRigaIntestazione(wsSrc, HDR_COD, MAX_RIGHE_INTESTAZIONE)
+        If hdrRowSrc = 0 Then
+            MsgBox "Nel file '" & wbSrc.Name & "' non trovo l'intestazione '" & HDR_COD & "'." & vbCrLf & _
+                   "Nessuna modifica effettuata.", vbCritical
+            GoTo CleanExit
+        End If
+
+        lastColSrc = wsSrc.Cells(hdrRowSrc, wsSrc.Columns.Count).End(xlToLeft).Column
+        srcHeaders = wsSrc.Range(wsSrc.Cells(hdrRowSrc, 1), wsSrc.Cells(hdrRowSrc, lastColSrc)).Value
+
+        'foglio vuoto: l'intestazione di destinazione e' quella del primo file
+        If creaIntestazione Then
+            dstHeaders = srcHeaders
+            lastColDst = lastColSrc
+            creaIntestazione = False
+            ReDim tipoData(1 To lastColDst)
+            ReDim isDateCol(1 To lastColDst)
+            For c = 1 To lastColDst
+                isDateCol(c) = (StrComp(Left$(Trim$(CStr(dstHeaders(1, c))), 4), "Data", vbTextCompare) = 0)
+            Next c
+            colCodDst = FindHeaderCol(dstHeaders, HDR_COD)
+            wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value = dstHeaders
+            wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Font.Bold = True
+        ElseIf iFile = 1 Then
+            lastColDst = wsDst.Cells(hdrRowDst, wsDst.Columns.Count).End(xlToLeft).Column
+            dstHeaders = wsDst.Range(wsDst.Cells(hdrRowDst, 1), wsDst.Cells(hdrRowDst, lastColDst)).Value
+            colCodDst = FindHeaderCol(dstHeaders, HDR_COD)
+            ReDim tipoData(1 To lastColDst)
+            ReDim isDateCol(1 To lastColDst)
+            For c = 1 To lastColDst
+                isDateCol(c) = (StrComp(Left$(Trim$(CStr(dstHeaders(1, c))), 4), "Data", vbTextCompare) = 0)
+            Next c
+
+            'righe gia' presenti (da conservare)
+            CaricaRighe wsDst, hdrRowDst + 1, colCodDst, lastColDst, dictNew, tipoData, isDateCol
+            For Each v In dictNew.Keys
+                dictOld(CStr(v)) = True
+            Next v
+        End If
+
+        colCodSrc = FindHeaderCol(srcHeaders, HDR_COD)
+
+        'mappa colonne sorgente -> destinazione tramite intestazione
+        ReDim srcToDst(1 To lastColSrc)
+        For c = 1 To lastColSrc
+            srcToDst(c) = 0
+            If Len(Trim$(CStr(srcHeaders(1, c)))) > 0 Then
+                srcToDst(c) = FindHeaderCol(dstHeaders, CStr(srcHeaders(1, c)))
+                If srcToDst(c) = 0 Then
+                    If InStr(1, colNonTrovate & "|", "|" & CStr(srcHeaders(1, c)) & "|", vbTextCompare) = 0 Then
+                        colNonTrovate = colNonTrovate & "|" & CStr(srcHeaders(1, c))
+                    End If
+                End If
+            End If
+        Next c
+
+        lastRowSrc = wsSrc.Cells(wsSrc.Rows.Count, colCodSrc).End(xlUp).Row
+        If lastRowSrc > hdrRowSrc Then
+            dati = wsSrc.Range(wsSrc.Cells(hdrRowSrc + 1, 1), wsSrc.Cells(lastRowSrc, lastColSrc)).Value
+
+            For r = 1 To UBound(dati, 1)
+                codice = Trim$(CStr(dati(r, colCodSrc)))
+                If Len(codice) > 0 Then
+                    'righe di servizio dell'export (es. "Filtri applicati: ...") non sono codici
+                    If InStr(codice, vbLf) > 0 Or Len(codice) > 30 Then
+                        nIgnorate = nIgnorate + 1
+                    Else
+                        ReDim vec(1 To lastColDst)
+                        For c = 1 To lastColSrc
+                            If srcToDst(c) > 0 Then
+                                v = dati(r, c)
+                                If isDateCol(srcToDst(c)) Then v = ConvertiData(v)
+                                If IsError(v) Then
+                                    v = Empty
+                                ElseIf VarType(v) = vbString Then
+                                    If Left$(v, 1) = "=" Then v = "'" & v
+                                ElseIf VarType(v) = vbDate Then
+                                    If CDbl(v) <> Int(CDbl(v)) Then
+                                        tipoData(srcToDst(c)) = 2
+                                    ElseIf tipoData(srcToDst(c)) = 0 Then
+                                        tipoData(srcToDst(c)) = 1
+                                    End If
+                                End If
+                                vec(srcToDst(c)) = v
+                            End If
+                        Next c
+                        dictNew(codice) = vec      'sovrascrive se esiste, altrimenti aggiunge
+                        dictRun(codice) = True
+                    End If
+                End If
+            Next r
+        End If
+
+        wbSrc.Close SaveChanges:=False
+        Set wbSrc = Nothing
+    Next iFile
+
+    If dictRun.Count = 0 Then
+        MsgBox "Nessun record da importare nei file selezionati." & vbCrLf & _
+               "Nessuna modifica effettuata.", vbExclamation
+        GoTo CleanExit
+    End If
+
+    '--- statistiche
+    For Each v In dictRun.Keys
+        If dictOld.Exists(CStr(v)) Then nAgg = nAgg + 1 Else nAdd = nAdd + 1
+    Next v
+
+    '--- riscrittura del foglio: righe preesistenti (aggiornate o no) + nuove
+    For c = 1 To lastColDst
+        If isDateCol(c) And tipoData(c) = 0 Then tipoData(c) = 1
+    Next c
+
+    lastUsed = wsDst.UsedRange.Row + wsDst.UsedRange.Rows.Count - 1
+    If lastUsed > hdrRowDst Then
+        wsDst.Range(wsDst.Cells(hdrRowDst + 1, 1), wsDst.Cells(lastUsed, lastColDst)).ClearContents
+    End If
+
+    n = dictNew.Count
+    itemsNew = dictNew.Items
+    ReDim outArr(1 To n, 1 To lastColDst)
+    For k = 0 To n - 1
+        vec = itemsNew(k)
+        For c = 1 To lastColDst
+            outArr(k + 1, c) = vec(c)
+        Next c
+    Next k
+
+    For c = 1 To lastColDst
+        If tipoData(c) = 2 Then
+            wsDst.Range(wsDst.Cells(hdrRowDst + 1, c), wsDst.Cells(hdrRowDst + n, c)).NumberFormat = "dd/mm/yyyy hh:mm"
+        ElseIf tipoData(c) = 1 Then
+            wsDst.Range(wsDst.Cells(hdrRowDst + 1, c), wsDst.Cells(hdrRowDst + n, c)).NumberFormat = "dd/mm/yyyy"
+        End If
+    Next c
+    wsDst.Range(wsDst.Cells(hdrRowDst + 1, 1), wsDst.Cells(hdrRowDst + n, lastColDst)).Value = outArr
+
+    ScriviLogReport wsReport, Now, nomiFile, FOGLIO, nAgg, nAdd, 0
+
+    MsgBox "Import completato nel foglio " & FOGLIO & "." & vbCrLf & _
+           "Righe nel foglio: " & n & vbCrLf & _
+           "  dai file: " & dictRun.Count & " (sovrascritte: " & nAgg & "; nuove: " & nAdd & ")" & _
+           IIf(Len(colNonTrovate) > 0, vbCrLf & "Colonne del file non presenti nel foglio (non importate): " & Replace(Mid$(colNonTrovate, 2), "|", ", "), "") & _
+           IIf(mDateNonConv > 0, vbCrLf & "ATTENZIONE: " & mDateNonConv & " date in formato testo non riconosciute (lasciate come testo).", ""), _
+           vbInformation
+
+CleanExit:
+    On Error Resume Next
+    If Not wbSrc Is Nothing Then wbSrc.Close SaveChanges:=False
+    Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
+    Application.ScreenUpdating = True
+    Exit Sub
+
+CleanFail:
+    MsgBox "Errore durante l'import: " & Err.Number & " - " & Err.Description, vbCritical
+    Resume CleanExit
+End Sub
